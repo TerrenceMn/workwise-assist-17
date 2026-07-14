@@ -241,7 +241,7 @@ function ChatPane({
             messages.map((m) => (
               <Message key={m.id} from={m.role}>
                 {m.role === "assistant" ? (
-                  <MessageContent variant="flat">
+                  <MessageContent>
                     <MessageResponse>{textOf(m)}</MessageResponse>
                   </MessageContent>
                 ) : (
@@ -252,7 +252,7 @@ function ChatPane({
           )}
           {status === "submitted" && (
             <Message from="assistant">
-              <MessageContent variant="flat">
+              <MessageContent>
                 <Shimmer>Thinking…</Shimmer>
               </MessageContent>
             </Message>
