@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { useChat } from "@ai-sdk/react";
-import { DefaultChatTransport, type UIMessage } from "ai";
+import { DefaultChatTransport, type FileUIPart, type UIMessage } from "ai";
 import { useNavigate, useParams } from "@tanstack/react-router";
-import { MessageSquare, Plus, Trash2 } from "lucide-react";
+import { FileText, MessageSquare, Paperclip, Plus, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -22,6 +22,9 @@ import {
   PromptInputTextarea,
   PromptInputFooter,
   PromptInputSubmit,
+  PromptInputButton,
+  usePromptInputAttachments,
+  type PromptInputMessage,
 } from "@/components/ai-elements/prompt-input";
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { WiseLogo } from "@/components/wise-logo";
@@ -34,6 +37,10 @@ import {
 } from "@/lib/storage";
 import { cn } from "@/lib/utils";
 
+const ACCEPTED_TYPES = "image/*,application/pdf";
+const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+const MAX_FILES = 5;
+
 export function ChatWorkbench() {
   const params = useParams({ strict: false }) as { threadId?: string };
   const navigate = useNavigate();
@@ -42,8 +49,6 @@ export function ChatWorkbench() {
   const [threads, setThreads] = useState<ChatThread[]>([]);
   const [hydrated, setHydrated] = useState(false);
 
-  // One-shot bootstrap: load threads, ensure one exists, navigate to it if
-  // we're on /chat root.
   useEffect(() => {
     if (typeof window === "undefined") return;
     let all = loadThreads();
@@ -196,12 +201,11 @@ function ChatPane({
 
   const [text, setText] = useState("");
 
-  // Persist messages when they change and are not empty.
   useEffect(() => {
     if (messages.length === 0) return;
     const firstUser = messages.find((m) => m.role === "user");
     const title = firstUser
-      ? textOf(firstUser).slice(0, 50) || "New chat"
+      ? (textOf(firstUser).slice(0, 50) || "New chat")
       : thread.title;
     onUpdateThread({
       ...thread,
@@ -214,11 +218,15 @@ function ChatPane({
 
   const isLoading = status === "submitted" || status === "streaming";
 
-  const handleSubmit = () => {
-    const value = text.trim();
-    if (!value || isLoading) return;
+  const handleSubmitMessage = (message: PromptInputMessage) => {
+    const value = message.text.trim();
+    const files = message.files ?? [];
+    if ((!value && files.length === 0) || isLoading) return;
     setText("");
-    void sendMessage({ text: value });
+    void sendMessage({
+      text: value || (files.length > 0 ? "Please review the attached file(s)." : ""),
+      files,
+    });
   };
 
   return (
@@ -240,13 +248,14 @@ function ChatPane({
           ) : (
             messages.map((m) => (
               <Message key={m.id} from={m.role}>
-                {m.role === "assistant" ? (
-                  <MessageContent>
+                <MessageContent>
+                  <MessageFiles message={m} />
+                  {m.role === "assistant" ? (
                     <MessageResponse>{textOf(m)}</MessageResponse>
-                  </MessageContent>
-                ) : (
-                  <MessageContent>{textOf(m)}</MessageContent>
-                )}
+                  ) : (
+                    textOf(m) && <div className="whitespace-pre-wrap">{textOf(m)}</div>
+                  )}
+                </MessageContent>
               </Message>
             ))
           )}
@@ -269,29 +278,123 @@ function ChatPane({
       <div className="border-t bg-background/80 p-4 backdrop-blur">
         <div className="mx-auto w-full max-w-3xl">
           <PromptInput
-            onSubmit={(_msg, e) => {
+            accept={ACCEPTED_TYPES}
+            multiple
+            maxFiles={MAX_FILES}
+            maxFileSize={MAX_FILE_SIZE}
+            onError={(e) => toast.error(e.message)}
+            onSubmit={(msg, e) => {
               e.preventDefault();
-              handleSubmit();
+              handleSubmitMessage(msg);
             }}
           >
+            <AttachmentPreviews />
             <PromptInputTextarea
-              placeholder="Ask Wise anything about your work…"
+              placeholder="Ask Wise anything — attach images or PDFs for context…"
               value={text}
               onChange={(e) => setText(e.target.value)}
             />
-            <PromptInputFooter className="justify-end">
-              <PromptInputSubmit
-                status={status}
-                disabled={!text.trim() || isLoading}
-              />
+            <PromptInputFooter className="justify-between">
+              <AttachmentTrigger />
+              <PromptInputSubmit status={status} disabled={isLoading} />
             </PromptInputFooter>
           </PromptInput>
           <p className="mt-2 text-center text-[11px] text-muted-foreground">
-            AI-generated content may require human review.
+            AI-generated content may require human review. Attachments up to 10MB — images and PDFs.
           </p>
         </div>
       </div>
     </section>
+  );
+}
+
+function AttachmentTrigger() {
+  const attachments = usePromptInputAttachments();
+  return (
+    <PromptInputButton
+      type="button"
+      variant="ghost"
+      onClick={() => attachments.openFileDialog()}
+      aria-label="Attach files"
+    >
+      <Paperclip className="h-4 w-4" />
+      <span className="hidden sm:inline">Attach</span>
+    </PromptInputButton>
+  );
+}
+
+function AttachmentPreviews() {
+  const attachments = usePromptInputAttachments();
+  if (attachments.files.length === 0) return null;
+  return (
+    <div className="flex flex-wrap gap-2 border-b p-2">
+      {attachments.files.map((f) => {
+        const isImage = f.mediaType?.startsWith("image/");
+        return (
+          <div
+            key={f.id}
+            className="group relative flex items-center gap-2 rounded-md border bg-background p-1.5 pr-7 text-xs"
+          >
+            {isImage && f.url ? (
+              <img
+                src={f.url}
+                alt={f.filename ?? "attachment"}
+                className="h-10 w-10 rounded object-cover"
+              />
+            ) : (
+              <div className="grid h-10 w-10 place-items-center rounded bg-muted">
+                <FileText className="h-4 w-4 text-muted-foreground" />
+              </div>
+            )}
+            <div className="max-w-[140px] truncate">{f.filename ?? "file"}</div>
+            <button
+              type="button"
+              onClick={() => attachments.remove(f.id)}
+              className="absolute right-1 top-1 rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+              aria-label="Remove attachment"
+            >
+              <X className="h-3 w-3" />
+            </button>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function MessageFiles({ message }: { message: UIMessage }) {
+  const files = message.parts.filter(
+    (p): p is FileUIPart => p.type === "file",
+  );
+  if (files.length === 0) return null;
+  return (
+    <div className="flex flex-wrap gap-2">
+      {files.map((f, i) => {
+        const isImage = f.mediaType?.startsWith("image/");
+        if (isImage && f.url) {
+          return (
+            <img
+              key={i}
+              src={f.url}
+              alt={f.filename ?? "attachment"}
+              className="max-h-64 max-w-full rounded-md border"
+            />
+          );
+        }
+        return (
+          <a
+            key={i}
+            href={f.url}
+            target="_blank"
+            rel="noreferrer"
+            className="flex items-center gap-2 rounded-md border bg-background px-3 py-2 text-xs hover:bg-muted"
+          >
+            <FileText className="h-4 w-4 text-muted-foreground" />
+            <span className="max-w-[220px] truncate">{f.filename ?? "file"}</span>
+          </a>
+        );
+      })}
+    </div>
   );
 }
 
@@ -319,7 +422,7 @@ function EmptyState({ onPick }: { onPick: (prompt: string) => void }) {
         How can Wise help you today?
       </h2>
       <p className="mt-1 text-sm text-muted-foreground">
-        Ask about anything work-related. Try one of these to get started.
+        Ask about anything work-related, or attach an image or PDF for review.
       </p>
       <div className="mt-6 grid gap-2 sm:grid-cols-2">
         {SUGGESTIONS.map((s) => (
